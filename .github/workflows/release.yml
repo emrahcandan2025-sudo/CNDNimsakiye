@@ -1,0 +1,76 @@
+name: APK Release
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    env:
+      KS_PASS: ${{ secrets.KEYSTORE_PASSWORD || 'cndn123456' }}
+      KEY_ALIAS: ${{ secrets.KEY_ALIAS || 'cndn' }}
+      KEY_PASS: ${{ secrets.KEY_PASSWORD || secrets.KEYSTORE_PASSWORD || 'cndn123456' }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 21
+
+      - uses: android-actions/setup-android@v3
+
+      - name: Bağımlılıkları kur
+        run: npm install
+
+      - name: Android projesini oluştur
+        run: |
+          npx cap add android
+          npx @capacitor/assets generate --android --iconBackgroundColor '#0d4a37' --iconBackgroundColorDark '#0d4a37'
+          npx cap sync android
+
+      - name: Sürüm bilgisini ayarla
+        run: |
+          if [[ "$GITHUB_REF" == refs/tags/v* ]]; then VERSION="${GITHUB_REF_NAME#v}"; else VERSION="1.0.${{ github.run_number }}"; fi
+          echo "VERSION=$VERSION" >> "$GITHUB_ENV"
+          sed -i "s/versionCode 1/versionCode ${{ github.run_number }}/; s/versionName \"1.0\"/versionName \"$VERSION\"/" android/app/build.gradle
+
+      - name: Release APK derle
+        working-directory: android
+        run: |
+          chmod +x gradlew
+          ./gradlew assembleRelease --no-daemon
+
+      - name: APK'yı imzala
+        run: |
+          BT=$(ls -d "$ANDROID_HOME"/build-tools/* | sort -V | tail -1)
+          if [ -n "${{ secrets.KEYSTORE_BASE64 }}" ]; then
+            echo "${{ secrets.KEYSTORE_BASE64 }}" | base64 -d > ks.jks
+          else
+            echo "KEYSTORE_BASE64 tanımlı değil, geçici anahtar üretiliyor"
+            keytool -genkeypair -keystore ks.jks -alias "$KEY_ALIAS" -keyalg RSA -keysize 2048 -validity 10000 \
+              -storepass "$KS_PASS" -keypass "$KEY_PASS" -dname "CN=CNDN, O=CNDN, C=TR"
+          fi
+          UNSIGNED=$(ls android/app/build/outputs/apk/release/*.apk | head -1)
+          "$BT/zipalign" -p -f 4 "$UNSIGNED" aligned.apk
+          "$BT/apksigner" sign --ks ks.jks --ks-key-alias "$KEY_ALIAS" \
+            --ks-pass "pass:$KS_PASS" --key-pass "pass:$KEY_PASS" \
+            --out "CNDN-Namaz-Vakitleri-v$VERSION.apk" aligned.apk
+          "$BT/apksigner" verify "CNDN-Namaz-Vakitleri-v$VERSION.apk"
+
+      - name: GitHub Release oluştur
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ startsWith(github.ref, 'refs/tags/') && github.ref_name || format('v1.0.{0}', github.run_number) }}
+          name: CNDN Namaz Vakitleri v${{ env.VERSION }}
+          files: CNDN-Namaz-Vakitleri-v${{ env.VERSION }}.apk
+          generate_release_notes: true
