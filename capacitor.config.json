@@ -1,0 +1,7 @@
+{
+  "appId": "com.cndn.namazvakitleri",
+  "appName": "CNDN Namaz Vakitleri",
+  "webDir": "www",
+  "backgroundColor": "#0c1714",
+  "android": { "allowMixedContent": false }
+}
